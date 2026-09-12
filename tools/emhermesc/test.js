@@ -12,7 +12,8 @@ const assert = require("assert");
 
 function compileOrError(str) {
     try {
-        let buffer = hc.compile(str);
+        let buffer = hc.compile(str, {});
+        console.log(JSON.stringify(buffer));
         console.log("bytecode buffer length", buffer.length)
     } catch (e) {
         console.error("Hermes error:", e.message);
@@ -21,5 +22,27 @@ function compileOrError(str) {
     return true;
 }
 
+function wrap(func) {
+    try {
+        return func();
+    } catch (e) {
+        return e.message;
+    }
+}
+
 assert(compileOrError("var x = 1; print(x);"));
 assert(!compileOrError("var x = 1 + ; print(x);"));
+
+let goodBuf = hc.compile("var x = 1; print(x);");
+
+let badBuf = Buffer.alloc(100);
+assert.equal(wrap(() => hc.validateBytecodeModule(badBuf, 3)), "bytecode is not aligned to 4");
+assert.equal(wrap(() => hc.validateBytecodeModule(badBuf, 0)), "bytecode buffer is too small");
+
+badBuf = Buffer.alloc(200);
+assert.equal(wrap(() => hc.validateBytecodeModule(badBuf, 0)), "bytecode buffer missing magic value");
+
+badBuf = goodBuf.slice(0, 140);
+assert.equal(wrap(() => hc.validateBytecodeModule(badBuf, 0)), "bytecode buffer is too small");
+
+assert.notEqual(wrap(() => hc.validateBytecodeModule(goodBuf, 0)), 0);

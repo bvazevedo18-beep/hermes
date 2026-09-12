@@ -22,6 +22,8 @@
 #include "llvm/Support/SHA1.h"
 #include "llvm/Support/Signals.h"
 
+#include "repl.h"
+
 using namespace hermes;
 
 namespace cl {
@@ -166,17 +168,45 @@ static int executeHBCBytecodeFromCL(
   return success ? EXIT_SUCCESS : EXIT_FAILURE;
 }
 
+static vm::RuntimeConfig getReplRuntimeConfig() {
+  return vm::RuntimeConfig::Builder()
+      .withGCConfig(
+          vm::GCConfig::Builder()
+              .withInitHeapSize(cl::InitHeapSize.bytes)
+              .withMaxHeapSize(cl::MaxHeapSize.bytes)
+              .withSanitizeConfig(vm::GCSanitizeConfig::Builder()
+                                      .withSanitizeRate(cl::GCSanitizeRate)
+                                      .withRandomSeed(cl::GCSanitizeRandomSeed)
+                                      .build())
+              .withShouldRecordStats(cl::GCPrintStats)
+              .build())
+      .withES6Proxy(cl::ES6Proxy)
+      .withES6Symbol(cl::ES6Symbol)
+      .withEnableHermesInternal(true)
+      .withEnableHermesInternalTestMethods(true)
+      .withAllowFunctionToStringWithRuntimeSource(cl::AllowFunctionToString)
+      .build();
+}
+
 int main(int argc, char **argv) {
+#ifndef HERMES_FBCODE_BUILD
   // Normalize the arg vector.
   llvm::InitLLVM initLLVM(argc, argv);
-  // Print a stack trace if we signal out.
-  llvm::sys::PrintStackTraceOnErrorSignal("Hermes driver");
-  llvm::PrettyStackTraceProgram X(argc, argv);
-  // Call llvm_shutdown() on exit to print stats and free memory.
+#else
+  // When both HERMES_FBCODE_BUILD and sanitizers are enabled, InitLLVM may have
+  // been already created and destroyed before main() is invoked. This presents
+  // a problem because InitLLVM can't be instantiated more than once in the same
+  // process. The most important functionality InitLLVM provides is shutting
+  // down LLVM in its destructor. We can use "llvm_shutdown_obj" to do the same.
   llvm::llvm_shutdown_obj Y;
+#endif
 
   llvm::cl::AddExtraVersionPrinter(driver::printHermesCompilerVMVersion);
   llvm::cl::ParseCommandLineOptions(argc, argv, "Hermes driver\n");
+
+  if (cl::InputFilenames.size() == 0) {
+    return repl(getReplRuntimeConfig());
+  }
 
   // Tell compiler to emit async break check if time-limit feature is enabled
   // so that user can turn on this feature with single ExecutionTimeLimit

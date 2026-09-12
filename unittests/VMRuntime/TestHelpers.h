@@ -9,6 +9,7 @@
 #define HERMES_UNITTESTS_VMRUNTIME_TESTHELPERS_H
 
 #include "hermes/BCGen/HBC/BytecodeGenerator.h"
+#include "hermes/BCGen/HBC/BytecodeProviderFromSrc.h"
 #include "hermes/Public/GCConfig.h"
 #include "hermes/Public/RuntimeConfig.h"
 #include "hermes/VM/Callable.h"
@@ -350,8 +351,7 @@ struct DummyRuntime final : public HandleRootOwner,
 
 /// A DummyRuntimeTestFixtureBase should be used by any test that requires a
 /// DummyRuntime. It takes a metadata table and a GCConfig, the latter can be
-/// used to specify heap size using the constants i.e kInitHeapSize and to
-/// specify a MemoryEventTracker implementation for testing memory profiling.
+/// used to specify heap size using the constants i.e kInitHeapSize.
 class DummyRuntimeTestFixtureBase : public ::testing::Test {
   std::shared_ptr<DummyRuntime> rt;
 
@@ -397,12 +397,7 @@ inline CodeBlock *createCodeBlock(
           0));
   runtimeModule->initializeWithoutCJSModulesMayAllocate(
       hbc::BCProviderFromSrc::createBCProviderFromSrc(std::move(BM)));
-
-  return CodeBlock::createCodeBlock(
-      runtimeModule,
-      runtimeModule->getBytecode()->getFunctionHeader(0),
-      runtimeModule->getBytecode()->getBytecode(0),
-      0);
+  return runtimeModule->getCodeBlockMayAllocate(0);
 }
 
 } // namespace vm

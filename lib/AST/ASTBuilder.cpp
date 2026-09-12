@@ -290,7 +290,7 @@ llvm::Optional<Node *> ASTBuilder::build(const JSONValue *node) {
     }
   }
 
-  Node *result;
+  Node *result = nullptr;
 
   // Some parsers (e.g. Flow) emit RestProperty instead of RestElement, so map
   // the former to the latter. Same for SpreadProperty and SpreadElement.
@@ -306,17 +306,26 @@ llvm::Optional<Node *> ASTBuilder::build(const JSONValue *node) {
     if (!lit)
       return None;
     result = *lit;
-  } else if (Typename == "TemplateElement") {
+    result->setSourceRange(sourceRng);
+    return result;
+  }
+
+  if (Typename == "TemplateElement") {
     auto templateElement = convertTemplateElement(jsObj);
     if (!templateElement) {
       return None;
     }
     result = *templateElement;
-  } else
+    result->setSourceRange(sourceRng);
+    return result;
+  }
+
 #define ESTREE_NODE_0_ARGS(NAME, BASE)    \
   if (Typename == #NAME) {                \
     result = new (context_) NAME##Node(); \
-  } else
+    result->setSourceRange(sourceRng);    \
+    return result;                        \
+  }
 
 #define ESTREE_NODE_1_ARGS(NAME, BASE, ARG0TY, ARG0NM, ARG0OPT)    \
   if (Typename == #NAME) {                                         \
@@ -326,7 +335,9 @@ llvm::Optional<Node *> ASTBuilder::build(const JSONValue *node) {
       return None;                                                 \
     }                                                              \
     result = new (context_) NAME##Node(std::move(arg0));           \
-  } else
+    result->setSourceRange(sourceRng);                             \
+    return result;                                                 \
+  }
 
 #define ESTREE_NODE_2_ARGS(                                               \
     NAME, BASE, ARG0TY, ARG0NM, ARG0OPT, ARG1TY, ARG1NM, ARG1OPT)         \
@@ -342,7 +353,9 @@ llvm::Optional<Node *> ASTBuilder::build(const JSONValue *node) {
       return None;                                                        \
     }                                                                     \
     result = new (context_) NAME##Node(std::move(arg0), std::move(arg1)); \
-  } else
+    result->setSourceRange(sourceRng);                                    \
+    return result;                                                        \
+  }
 
 #define ESTREE_NODE_3_ARGS(                                            \
     NAME,                                                              \
@@ -374,7 +387,9 @@ llvm::Optional<Node *> ASTBuilder::build(const JSONValue *node) {
     }                                                                  \
     result = new (context_)                                            \
         NAME##Node(std::move(arg0), std::move(arg1), std::move(arg2)); \
-  } else
+    result->setSourceRange(sourceRng);                                 \
+    return result;                                                     \
+  }
 
 #define ESTREE_NODE_4_ARGS(                                                  \
     NAME,                                                                    \
@@ -414,7 +429,9 @@ llvm::Optional<Node *> ASTBuilder::build(const JSONValue *node) {
     }                                                                        \
     result = new (context_) NAME##Node(                                      \
         std::move(arg0), std::move(arg1), std::move(arg2), std::move(arg3)); \
-  } else
+    result->setSourceRange(sourceRng);                                       \
+    return result;                                                           \
+  }
 
 #define ESTREE_NODE_5_ARGS(                                        \
     NAME,                                                          \
@@ -466,7 +483,9 @@ llvm::Optional<Node *> ASTBuilder::build(const JSONValue *node) {
         std::move(arg2),                                           \
         std::move(arg3),                                           \
         std::move(arg4));                                          \
-  } else
+    result->setSourceRange(sourceRng);                             \
+    return result;                                                 \
+  }
 
 #define ESTREE_NODE_6_ARGS(                                        \
     NAME,                                                          \
@@ -527,17 +546,168 @@ llvm::Optional<Node *> ASTBuilder::build(const JSONValue *node) {
         std::move(arg3),                                           \
         std::move(arg4),                                           \
         std::move(arg5));                                          \
-  } else
+    result->setSourceRange(sourceRng);                             \
+    return result;                                                 \
+  }
+
+#define ESTREE_NODE_7_ARGS(                                        \
+    NAME,                                                          \
+    BASE,                                                          \
+    ARG0TY,                                                        \
+    ARG0NM,                                                        \
+    ARG0OPT,                                                       \
+    ARG1TY,                                                        \
+    ARG1NM,                                                        \
+    ARG1OPT,                                                       \
+    ARG2TY,                                                        \
+    ARG2NM,                                                        \
+    ARG2OPT,                                                       \
+    ARG3TY,                                                        \
+    ARG3NM,                                                        \
+    ARG3OPT,                                                       \
+    ARG4TY,                                                        \
+    ARG4NM,                                                        \
+    ARG4OPT,                                                       \
+    ARG5TY,                                                        \
+    ARG5NM,                                                        \
+    ARG5OPT,                                                       \
+    ARG6TY,                                                        \
+    ARG6NM,                                                        \
+    ARG6OPT)                                                       \
+  if (Typename == #NAME) {                                         \
+    ARG0TY arg0{};                                                 \
+    ARG1TY arg1{};                                                 \
+    ARG2TY arg2{};                                                 \
+    ARG3TY arg3{};                                                 \
+    ARG4TY arg4{};                                                 \
+    ARG5TY arg5{};                                                 \
+    ARG6TY arg6{};                                                 \
+    if (!extract##ARG0TY(jsObj, #ARG0NM, arg0) && !(ARG0OPT)) {    \
+      sm_.error(SMLoc{}, "Invalid field '" #ARG0NM "' in " #NAME); \
+      return None;                                                 \
+    }                                                              \
+    if (!extract##ARG1TY(jsObj, #ARG1NM, arg1) && !(ARG1OPT)) {    \
+      sm_.error(SMLoc{}, "Invalid field '" #ARG1NM "' in " #NAME); \
+      return None;                                                 \
+    }                                                              \
+    if (!extract##ARG2TY(jsObj, #ARG2NM, arg2) && !(ARG2OPT)) {    \
+      sm_.error(SMLoc{}, "Invalid field '" #ARG2NM "' in " #NAME); \
+      return None;                                                 \
+    }                                                              \
+    if (!extract##ARG3TY(jsObj, #ARG3NM, arg3) && !(ARG3OPT)) {    \
+      sm_.error(SMLoc{}, "Invalid field '" #ARG3NM "' in " #NAME); \
+      return None;                                                 \
+    }                                                              \
+    if (!extract##ARG4TY(jsObj, #ARG4NM, arg4) && !(ARG4OPT)) {    \
+      sm_.error(SMLoc{}, "Invalid field '" #ARG4NM "' in " #NAME); \
+      return None;                                                 \
+    }                                                              \
+    if (!extract##ARG5TY(jsObj, #ARG5NM, arg5) && !(ARG5OPT)) {    \
+      sm_.error(SMLoc{}, "Invalid field '" #ARG5NM "' in " #NAME); \
+      return None;                                                 \
+    }                                                              \
+    if (!extract##ARG6TY(jsObj, #ARG6NM, arg6) && !(ARG6OPT)) {    \
+      sm_.error(SMLoc{}, "Invalid field '" #ARG6NM "' in " #NAME); \
+      return None;                                                 \
+    }                                                              \
+    result = new (context_) NAME##Node(                            \
+        std::move(arg0),                                           \
+        std::move(arg1),                                           \
+        std::move(arg2),                                           \
+        std::move(arg3),                                           \
+        std::move(arg4),                                           \
+        std::move(arg5),                                           \
+        std::move(arg6));                                          \
+    result->setSourceRange(sourceRng);                             \
+    return result;                                                 \
+  }
+
+#define ESTREE_NODE_8_ARGS(                                        \
+    NAME,                                                          \
+    BASE,                                                          \
+    ARG0TY,                                                        \
+    ARG0NM,                                                        \
+    ARG0OPT,                                                       \
+    ARG1TY,                                                        \
+    ARG1NM,                                                        \
+    ARG1OPT,                                                       \
+    ARG2TY,                                                        \
+    ARG2NM,                                                        \
+    ARG2OPT,                                                       \
+    ARG3TY,                                                        \
+    ARG3NM,                                                        \
+    ARG3OPT,                                                       \
+    ARG4TY,                                                        \
+    ARG4NM,                                                        \
+    ARG4OPT,                                                       \
+    ARG5TY,                                                        \
+    ARG5NM,                                                        \
+    ARG5OPT,                                                       \
+    ARG6TY,                                                        \
+    ARG6NM,                                                        \
+    ARG6OPT,                                                       \
+    ARG7TY,                                                        \
+    ARG7NM,                                                        \
+    ARG7OPT)                                                       \
+  if (Typename == #NAME) {                                         \
+    ARG0TY arg0{};                                                 \
+    ARG1TY arg1{};                                                 \
+    ARG2TY arg2{};                                                 \
+    ARG3TY arg3{};                                                 \
+    ARG4TY arg4{};                                                 \
+    ARG5TY arg5{};                                                 \
+    ARG6TY arg6{};                                                 \
+    ARG7TY arg7{};                                                 \
+    if (!extract##ARG0TY(jsObj, #ARG0NM, arg0) && !(ARG0OPT)) {    \
+      sm_.error(SMLoc{}, "Invalid field '" #ARG0NM "' in " #NAME); \
+      return None;                                                 \
+    }                                                              \
+    if (!extract##ARG1TY(jsObj, #ARG1NM, arg1) && !(ARG1OPT)) {    \
+      sm_.error(SMLoc{}, "Invalid field '" #ARG1NM "' in " #NAME); \
+      return None;                                                 \
+    }                                                              \
+    if (!extract##ARG2TY(jsObj, #ARG2NM, arg2) && !(ARG2OPT)) {    \
+      sm_.error(SMLoc{}, "Invalid field '" #ARG2NM "' in " #NAME); \
+      return None;                                                 \
+    }                                                              \
+    if (!extract##ARG3TY(jsObj, #ARG3NM, arg3) && !(ARG3OPT)) {    \
+      sm_.error(SMLoc{}, "Invalid field '" #ARG3NM "' in " #NAME); \
+      return None;                                                 \
+    }                                                              \
+    if (!extract##ARG4TY(jsObj, #ARG4NM, arg4) && !(ARG4OPT)) {    \
+      sm_.error(SMLoc{}, "Invalid field '" #ARG4NM "' in " #NAME); \
+      return None;                                                 \
+    }                                                              \
+    if (!extract##ARG5TY(jsObj, #ARG5NM, arg5) && !(ARG5OPT)) {    \
+      sm_.error(SMLoc{}, "Invalid field '" #ARG5NM "' in " #NAME); \
+      return None;                                                 \
+    }                                                              \
+    if (!extract##ARG6TY(jsObj, #ARG6NM, arg6) && !(ARG6OPT)) {    \
+      sm_.error(SMLoc{}, "Invalid field '" #ARG6NM "' in " #NAME); \
+      return None;                                                 \
+    }                                                              \
+    if (!extract##ARG7TY(jsObj, #ARG7NM, arg7) && !(ARG7OPT)) {    \
+      sm_.error(SMLoc{}, "Invalid field '" #ARG7NM "' in " #NAME); \
+      return None;                                                 \
+    }                                                              \
+    result = new (context_) NAME##Node(                            \
+        std::move(arg0),                                           \
+        std::move(arg1),                                           \
+        std::move(arg2),                                           \
+        std::move(arg3),                                           \
+        std::move(arg4),                                           \
+        std::move(arg5),                                           \
+        std::move(arg6),                                           \
+        std::move(arg7));                                          \
+    result->setSourceRange(sourceRng);                             \
+    return result;                                                 \
+  }
 
 #include "hermes/AST/ESTree.def"
 
-  {
-    sm_.error(SMLoc{}, Twine("Unknown node type '") + Typename + "'");
-    return None;
-  }
-
-  result->setSourceRange(sourceRng);
-  return result;
+  assert(result == nullptr && "result must be returned");
+  sm_.error(SMLoc{}, Twine("Unknown node type '") + Typename + "'");
+  return None;
 }
 
 /// Visits all the ast nodes and synthesizes debug info for each one.

@@ -379,8 +379,7 @@ TEST(JSLexerTest, StringTest1) {
 
   JSLexer lex(
       "'aa' \"bb\" 'open1\n"
-      "'open2\xe2\x80\xa8"
-      "\"open3",
+      "\"open2",
       sm,
       alloc);
 
@@ -402,13 +401,42 @@ TEST(JSLexerTest, StringTest1) {
   EXPECT_STREQ("open2", lex.getCurToken()->getStringLiteral()->c_str());
   ASSERT_TRUE(lex.isNewLineBeforeCurrentToken());
 
-  ASSERT_EQ(TokenKind::string_literal, lex.advance()->getKind());
-  ASSERT_EQ(1, diag.getErrCountClear());
-  EXPECT_STREQ("open3", lex.getCurToken()->getStringLiteral()->c_str());
-  ASSERT_TRUE(lex.isNewLineBeforeCurrentToken());
-
   ASSERT_EQ(TokenKind::eof, lex.advance()->getKind());
   ASSERT_FALSE(lex.isNewLineBeforeCurrentToken());
+}
+
+TEST(JSLexerTest, StringLineParaSepTest) {
+  JSLexer::Allocator alloc;
+  SourceErrorManager sm;
+  DiagContext diag(sm);
+
+  // Test that Unicode line and paragraph separatot are valid in a string
+  // (since ES10).
+  JSLexer lex(
+      "'\xe2\x80\xa8' "
+      "'\xe2\x80\xa9' "
+      "'\\\xe2\x80\xa8' "
+      "'\\\xe2\x80\xa9' ",
+      sm,
+      alloc);
+
+  ASSERT_EQ(TokenKind::string_literal, lex.advance()->getKind());
+  ASSERT_EQ(0, diag.getErrCountClear());
+  EXPECT_STREQ("\xe2\x80\xa8", lex.getCurToken()->getStringLiteral()->c_str());
+
+  ASSERT_EQ(TokenKind::string_literal, lex.advance()->getKind());
+  ASSERT_EQ(0, diag.getErrCountClear());
+  EXPECT_STREQ("\xe2\x80\xa9", lex.getCurToken()->getStringLiteral()->c_str());
+
+  ASSERT_EQ(TokenKind::string_literal, lex.advance()->getKind());
+  ASSERT_EQ(0, diag.getErrCountClear());
+  EXPECT_STREQ("", lex.getCurToken()->getStringLiteral()->c_str());
+
+  ASSERT_EQ(TokenKind::string_literal, lex.advance()->getKind());
+  ASSERT_EQ(0, diag.getErrCountClear());
+  EXPECT_STREQ("", lex.getCurToken()->getStringLiteral()->c_str());
+
+  ASSERT_EQ(TokenKind::eof, lex.advance()->getKind());
 }
 
 TEST(JSLexerTest, StringTest2) {
@@ -791,6 +819,49 @@ TEST(JSLexerTest, SourceMappingUrl) {
   }
 }
 
+TEST(JSLexerTest, LookaheadTest) {
+  JSLexer::Allocator alloc;
+  SourceErrorManager sm;
+  DiagContext diag(sm);
+
+  // Test the lookahead function which will not revert to the current
+  // token after lookahead if an optional expected token is provided.
+  JSLexer lex("function( foo,", sm, alloc);
+
+  ASSERT_EQ(TokenKind::rw_function, lex.advance()->getKind());
+
+  {
+    // Without the expected token, always revert.
+    auto optNext = lex.lookahead1(llvm::None);
+    ASSERT_TRUE(optNext.hasValue());
+    EXPECT_EQ(TokenKind::l_paren, optNext.getValue());
+  }
+
+  ASSERT_EQ(TokenKind::rw_function, lex.getCurToken()->getKind());
+  ASSERT_EQ(TokenKind::l_paren, lex.advance()->getKind());
+
+  // With the expected token, revert iff it doesn't match.
+  ASSERT_EQ(TokenKind::identifier, lex.advance()->getKind());
+
+  {
+    auto optNext = lex.lookahead1(TokenKind::plus);
+    ASSERT_TRUE(optNext.hasValue());
+    EXPECT_EQ(TokenKind::comma, optNext.getValue());
+    // Revert to original token.
+    ASSERT_EQ(TokenKind::identifier, lex.getCurToken()->getKind());
+  }
+
+  {
+    auto optNext = lex.lookahead1(TokenKind::comma);
+    ASSERT_TRUE(optNext.hasValue());
+    EXPECT_EQ(TokenKind::comma, optNext.getValue());
+    // Match with expected, keep the lookahead token.
+    ASSERT_EQ(TokenKind::comma, lex.getCurToken()->getKind());
+  }
+
+  ASSERT_EQ(TokenKind::eof, lex.advance()->getKind());
+}
+
 TEST(JSLexerTest, RegressConsumeBadHexTest) {
   JSLexer::Allocator alloc;
   SourceErrorManager sm;
@@ -808,6 +879,25 @@ TEST(JSLexerTest, RegressConsumeBadHexTest) {
   ASSERT_FALSE(lex.isNewLineBeforeCurrentToken());
 
   ASSERT_EQ(0, diag.getErrCountClear());
+}
+
+TEST(JSLexerTest, JSXTest) {
+  JSLexer::Allocator alloc;
+  SourceErrorManager sm;
+  DiagContext diag(sm);
+
+  JSLexer lex("abc def{xyz<qwerty", sm, alloc);
+
+  ASSERT_EQ(TokenKind::jsx_text, lex.advanceInJSXChild()->getKind());
+  EXPECT_STREQ("abc def", lex.getCurToken()->getJSXTextRaw()->c_str());
+
+  ASSERT_EQ(TokenKind::l_brace, lex.advanceInJSXChild()->getKind());
+  ASSERT_EQ(TokenKind::jsx_text, lex.advanceInJSXChild()->getKind());
+  EXPECT_STREQ("xyz", lex.getCurToken()->getJSXTextRaw()->c_str());
+
+  ASSERT_EQ(TokenKind::less, lex.advanceInJSXChild()->getKind());
+  ASSERT_EQ(TokenKind::jsx_text, lex.advanceInJSXChild()->getKind());
+  EXPECT_STREQ("qwerty", lex.getCurToken()->getJSXTextRaw()->c_str());
 }
 
 } // namespace

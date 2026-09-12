@@ -5,6 +5,8 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+#include "repl.h"
+
 #include "llvm/ADT/SmallString.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/FileSystem.h"
@@ -13,11 +15,8 @@
 #include "llvm/Support/Signals.h"
 #include "llvm/Support/raw_ostream.h"
 
-#include "hermes/CompilerDriver/CompilerDriver.h"
 #include "hermes/ConsoleHost/ConsoleHost.h"
-#include "hermes/ConsoleHost/RuntimeFlags.h"
 #include "hermes/Parser/JSLexer.h"
-#include "hermes/Public/GCConfig.h"
 #include "hermes/Support/OSCompat.h"
 #include "hermes/VM/Callable.h"
 #include "hermes/VM/JSError.h"
@@ -43,8 +42,6 @@
 #include <iostream>
 #include <stack>
 
-#define DEBUG_TYPE "hermes-repl"
-
 #define C_STRING(x) #x
 
 #if HAVE_LIBREADLINE
@@ -63,11 +60,6 @@ static llvm::cl::opt<std::string> Prompt2String(
     "prompt2",
     llvm::cl::init("...  "),
     llvm::cl::desc("Prompt string for continuation lines in the REPL."));
-
-static llvm::cl::opt<bool> GCPrintStats(
-    "gc-print-stats",
-    llvm::cl::desc("Output summary garbage collection statistics at exit"),
-    llvm::cl::init(false));
 
 namespace {
 enum class ReadResult {
@@ -121,6 +113,7 @@ static void handleSignal(int sig) {
 }
 
 static ReadResult readInputLine(const char *prompt, std::string &line) {
+#ifndef __EMSCRIPTEN__
   struct sigaction action;
   sigemptyset(&action.sa_mask);
   action.sa_flags = 0;
@@ -146,11 +139,17 @@ static ReadResult readInputLine(const char *prompt, std::string &line) {
     return ReadResult::SUCCESS;
   }
 #endif
+#else
+  // Avoid unused function warnings.
+  (void)handleSignal;
+#endif
   llvm::outs() << prompt;
   std::string current{};
   bool success = !!std::getline(std::cin, current);
+#ifndef __EMSCRIPTEN__
   action.sa_handler = oldAction.sa_handler;
   ::sigaction(SIGINT, &action, &oldAction);
+#endif
   if (!success) {
     return ReadResult::FAILURE;
   }
@@ -194,7 +193,64 @@ static bool needsAnotherLine(llvm::StringRef input) {
     }
   };
 
-  while (const parser::Token *token = lexer.advance()) {
+  // Look at the previous token to see if the next token could possibly be the
+  // beginning of a regular expression.
+  // https://github.com/mikesamuel/es5-lexer/blob/master/src/guess_is_regexp.js
+  auto isRegexPossible = [](OptValue<parser::TokenKind> previousTokenKind) {
+    if (!previousTokenKind) {
+      return true;
+    }
+    switch (*previousTokenKind) {
+      case parser::TokenKind::rw_break:
+      case parser::TokenKind::rw_case:
+      case parser::TokenKind::rw_continue:
+      case parser::TokenKind::rw_delete:
+      case parser::TokenKind::rw_do:
+      case parser::TokenKind::rw_else:
+      case parser::TokenKind::rw_finally:
+      case parser::TokenKind::rw_in:
+      case parser::TokenKind::rw_instanceof:
+      case parser::TokenKind::rw_return:
+      case parser::TokenKind::rw_throw:
+      case parser::TokenKind::rw_try:
+      case parser::TokenKind::rw_typeof:
+      case parser::TokenKind::rw_void:
+      case parser::TokenKind::plus:
+      case parser::TokenKind::minus:
+      case parser::TokenKind::period:
+      case parser::TokenKind::slash:
+      case parser::TokenKind::comma:
+      case parser::TokenKind::star:
+      case parser::TokenKind::exclaim:
+      case parser::TokenKind::percent:
+      case parser::TokenKind::amp:
+      case parser::TokenKind::l_paren:
+      case parser::TokenKind::colon:
+      case parser::TokenKind::semi:
+      case parser::TokenKind::less:
+      case parser::TokenKind::equal:
+      case parser::TokenKind::greater:
+      case parser::TokenKind::question:
+      case parser::TokenKind::l_square:
+      case parser::TokenKind::caret:
+      case parser::TokenKind::l_brace:
+      case parser::TokenKind::pipe:
+      case parser::TokenKind::r_brace:
+      case parser::TokenKind::tilde:
+        return true;
+      default:
+        return false;
+    }
+  };
+
+  OptValue<parser::TokenKind> previousTokenKind;
+
+  // Use AllowRegExp when a regular expression is possible and use AllowDiv
+  // otherwise so that division is correctly parsed.
+  while (const parser::Token *token = lexer.advance(
+             isRegexPossible(previousTokenKind)
+                 ? parser::JSLexer::GrammarContext::AllowRegExp
+                 : parser::JSLexer::GrammarContext::AllowDiv)) {
     if (token->getKind() == parser::TokenKind::eof) {
       break;
     }
@@ -224,6 +280,7 @@ static bool needsAnotherLine(llvm::StringRef input) {
         // Do nothing for the other tokens.
         break;
     }
+    previousTokenKind = token->getKind();
   }
 
   // If the stack is empty, then we can't recover from the error,
@@ -253,31 +310,8 @@ static std::error_code loadHistoryFile(llvm::SmallString<128> &historyFile) {
 #endif
 
 // This is the vm driver.
-int main(int argc, char **argv) {
-  llvm::sys::PrintStackTraceOnErrorSignal("Hermes REPL");
-  llvm::PrettyStackTraceProgram X(argc, argv);
-  llvm::llvm_shutdown_obj Y;
-  llvm::cl::AddExtraVersionPrinter(driver::printHermesREPLVersion);
-  llvm::cl::ParseCommandLineOptions(argc, argv, "Hermes REPL driver\n");
-
-  auto runtime = vm::Runtime::create(
-      vm::RuntimeConfig::Builder()
-          .withGCConfig(vm::GCConfig::Builder()
-                            .withInitHeapSize(cl::InitHeapSize.bytes)
-                            .withMaxHeapSize(cl::MaxHeapSize.bytes)
-                            .withSanitizeConfig(
-                                vm::GCSanitizeConfig::Builder()
-                                    .withSanitizeRate(cl::GCSanitizeRate)
-                                    .withRandomSeed(cl::GCSanitizeRandomSeed)
-                                    .build())
-                            .withShouldRecordStats(GCPrintStats)
-                            .build())
-          .withES6Proxy(cl::ES6Proxy)
-          .withES6Symbol(cl::ES6Symbol)
-          .withEnableHermesInternal(true)
-          .withEnableHermesInternalTestMethods(true)
-          .withAllowFunctionToStringWithRuntimeSource(cl::AllowFunctionToString)
-          .build());
+int repl(const vm::RuntimeConfig &config) {
+  auto runtime = vm::Runtime::create(config);
 
   vm::GCScope gcScope(runtime.get());
   installConsoleBindings(runtime.get());

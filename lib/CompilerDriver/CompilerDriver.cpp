@@ -133,11 +133,11 @@ class CLFlag {
   }
 };
 
-static cl::OptionCategory CompilerCategory(
+static OptionCategory CompilerCategory(
     "Compiler Options",
     "These options change how JS is compiled.");
 
-static list<std::string> InputFilenames(desc("input file"), Positional);
+list<std::string> InputFilenames(desc("<file1> <file2>..."), Positional);
 
 #if !defined(NDEBUG) || defined(LLVM_ENABLE_STATS)
 static opt<bool> PrintStats("print-stats", desc("Print statistics"));
@@ -406,6 +406,11 @@ static opt<bool> CommonJS(
     desc("Use CommonJS modules"),
     init(false),
     cat(CompilerCategory));
+
+#if HERMES_PARSE_JSX
+static opt<bool>
+    JSX("parse-jsx", desc("Parse JSX"), init(false), cat(CompilerCategory));
+#endif
 
 static CLFlag StaticRequire(
     'f',
@@ -987,6 +992,12 @@ std::shared_ptr<Context> createContext(
     context->setUseCJSModules(true);
   }
 
+#if HERMES_PARSE_JSX
+  if (cl::JSX) {
+    context->setParseJSX(true);
+  }
+#endif
+
   if (cl::EmitDebugInfo) {
     context->setDebugInfoSetting(DebugInfoSetting::ALL);
   } else if (cl::OutputSourceMap) {
@@ -1371,6 +1382,9 @@ bool generateIRForSourcesAsCJSModules(
       if (!ast) {
         return false;
       }
+      if (cl::DumpTarget < DumpIR) {
+        continue;
+      }
       generateIRForCJSModule(
           cast<ESTree::FunctionExpressionNode>(ast),
           moduleInSegment.id,
@@ -1617,6 +1631,9 @@ CompileResult processSourceFiles(
             sourceMapGen ? &*sourceMapGen : nullptr)) {
       return ParsingFailed;
     }
+    if (cl::DumpTarget < DumpIR) {
+      return Success;
+    }
   } else {
     if (sourceMapGen) {
       for (const auto &filename : cl::InputFilenames) {
@@ -1855,8 +1872,9 @@ void printHermesCompilerVMVersion(llvm::raw_ostream &s) {
 void printHermesCompilerVersion(llvm::raw_ostream &s) {
   printHermesVersion(s);
 }
-void printHermesREPLVersion(llvm::raw_ostream &s) {
-  printHermesVersion(s, " REPL", false);
+
+OutputFormatKind outputFormatFromCommandLineOptions() {
+  return cl::DumpTarget;
 }
 
 CompileResult compileFromCommandLineOptions() {

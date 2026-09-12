@@ -240,6 +240,9 @@ class RuntimeDecorator : public Base, private jsi::Instrumentation {
   bool isArrayBuffer(const Object& o) const override {
     return plain_.isArrayBuffer(o);
   };
+  bool isTypedArray(const Object& o) const override {
+    return plain_.isTypedArray(o);
+  };
   bool isFunction(const Object& o) const override {
     return plain_.isFunction(o);
   };
@@ -249,6 +252,9 @@ class RuntimeDecorator : public Base, private jsi::Instrumentation {
   bool isHostFunction(const jsi::Function& f) const override {
     return plain_.isHostFunction(f);
   };
+  TypedArrayKind getTypedArrayKind(const TypedArrayBase& a) const override {
+    return plain_.getTypedArrayKind(a);
+  }
   Array getPropertyNames(const Object& o) override {
     return plain_.getPropertyNames(o);
   };
@@ -263,15 +269,30 @@ class RuntimeDecorator : public Base, private jsi::Instrumentation {
   Array createArray(size_t length) override {
     return plain_.createArray(length);
   };
+  TypedArrayBase createTypedArray(size_t length, TypedArrayKind kind) override {
+    return plain_.createTypedArray(length, kind);
+  }
   size_t size(const Array& a) override {
     return plain_.size(a);
   };
   size_t size(const ArrayBuffer& ab) override {
     return plain_.size(ab);
   };
+  size_t size(const TypedArrayBase& ta) override {
+    return plain_.size(ta);
+  }
+  size_t byteOffset(const TypedArrayBase& ta) override {
+    return plain_.byteOffset(ta);
+  }
   uint8_t* data(const ArrayBuffer& ab) override {
     return plain_.data(ab);
   };
+  bool hasBuffer(const TypedArrayBase& ta) override {
+    return plain_.hasBuffer(ta);
+  }
+  ArrayBuffer getBuffer(const TypedArrayBase& ta) override {
+    return plain_.getBuffer(ta);
+  }
   Value getValueAtIndex(const Array& a, size_t i) override {
     return plain_.getValueAtIndex(a, i);
   };
@@ -405,6 +426,44 @@ struct AfterCaller<T, decltype((void)&T::after)> {
   static void after(T& t) {
     t.after();
   }
+};
+
+// It's possible to use multiple decorators by nesting
+// WithRuntimeDecorator<...>, but this specialization allows use of
+// std::tuple of decorator classes instead.  See testlib.cpp for an
+// example.
+template <typename... T>
+struct BeforeCaller<std::tuple<T...>> {
+  static void before(std::tuple<T...>& tuple) {
+    all_before<0, T...>(tuple);
+  }
+
+ private:
+  template <size_t N, typename U, typename... Rest>
+  static void all_before(std::tuple<T...>& tuple) {
+    detail::BeforeCaller<U>::before(std::get<N>(tuple));
+    all_before<N + 1, Rest...>(tuple);
+  }
+
+  template <size_t N>
+  static void all_before(std::tuple<T...>&) {}
+};
+
+template <typename... T>
+struct AfterCaller<std::tuple<T...>> {
+  static void after(std::tuple<T...>& tuple) {
+    all_after<0, T...>(tuple);
+  }
+
+ private:
+  template <size_t N, typename U, typename... Rest>
+  static void all_after(std::tuple<T...>& tuple) {
+    all_after<N + 1, Rest...>(tuple);
+    detail::AfterCaller<U>::after(std::get<N>(tuple));
+  }
+
+  template <size_t N>
+  static void all_after(std::tuple<T...>&) {}
 };
 
 } // namespace detail
@@ -574,6 +633,10 @@ class WithRuntimeDecorator : public RuntimeDecorator<Plain, Base> {
     Around around{with_};
     return RD::isArrayBuffer(o);
   };
+  bool isTypedArray(const Object& o) const override {
+    Around around{with_};
+    return RD::isTypedArray(o);
+  };
   bool isFunction(const Object& o) const override {
     Around around{with_};
     return RD::isFunction(o);
@@ -586,6 +649,10 @@ class WithRuntimeDecorator : public RuntimeDecorator<Plain, Base> {
     Around around{with_};
     return RD::isHostFunction(f);
   };
+  TypedArrayKind getTypedArrayKind(const TypedArrayBase& a) const override {
+    Around around{with_};
+    return RD::getTypedArrayKind(a);
+  }
   Array getPropertyNames(const Object& o) override {
     Around around{with_};
     return RD::getPropertyNames(o);
@@ -604,6 +671,10 @@ class WithRuntimeDecorator : public RuntimeDecorator<Plain, Base> {
     Around around{with_};
     return RD::createArray(length);
   };
+  TypedArrayBase createTypedArray(size_t length, TypedArrayKind kind) override {
+    Around around{with_};
+    return RD::createTypedArray(length, kind);
+  }
   size_t size(const Array& a) override {
     Around around{with_};
     return RD::size(a);
@@ -612,10 +683,26 @@ class WithRuntimeDecorator : public RuntimeDecorator<Plain, Base> {
     Around around{with_};
     return RD::size(ab);
   };
+  size_t size(const TypedArrayBase& ta) override {
+    Around around{with_};
+    return RD::size(ta);
+  };
+  size_t byteOffset(const TypedArrayBase& ta) override {
+    Around around{with_};
+    return RD::byteOffset(ta);
+  };
   uint8_t* data(const ArrayBuffer& ab) override {
     Around around{with_};
     return RD::data(ab);
   };
+  bool hasBuffer(const TypedArrayBase& ta) override {
+    Around around{with_};
+    return RD::hasBuffer(ta);
+  }
+  ArrayBuffer getBuffer(const TypedArrayBase& ta) override {
+    Around around{with_};
+    return RD::getBuffer(ta);
+  }
   Value getValueAtIndex(const Array& a, size_t i) override {
     Around around{with_};
     return RD::getValueAtIndex(a, i);
@@ -689,41 +776,6 @@ class WithRuntimeDecorator : public RuntimeDecorator<Plain, Base> {
   };
 
   With& with_;
-};
-
-// Nesting WithRuntimeDecorator will work, but using this as the With
-// type will be easier to read, write, and understand.
-template <typename... T>
-class WithTuple : public std::tuple<T...> {
- public:
-  using std::tuple<T...>::tuple;
-
-  void before() {
-    all_before<0, T...>();
-  }
-
-  void after() {
-    all_after<0, T...>();
-  }
-
- private:
-  template <size_t N, typename U, typename... Rest>
-  void all_before() {
-    detail::BeforeCaller<U>::before(std::get<N>(*this));
-    all_before<N + 1, Rest...>();
-  }
-
-  template <size_t N>
-  void all_before() {}
-
-  template <size_t N, typename U, typename... Rest>
-  void all_after() {
-    all_after<N + 1, Rest...>();
-    detail::AfterCaller<U>::after(std::get<N>(*this));
-  }
-
-  template <size_t N>
-  void all_after() {}
 };
 
 } // namespace jsi

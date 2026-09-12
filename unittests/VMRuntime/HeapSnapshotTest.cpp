@@ -9,6 +9,7 @@
 #include "TestHelpers.h"
 #include "gtest/gtest.h"
 #include "hermes/Parser/JSONParser.h"
+#include "hermes/Support/Algorithms.h"
 #include "hermes/Support/Allocator.h"
 #include "hermes/VM/CellKind.h"
 #include "hermes/VM/GC.h"
@@ -740,6 +741,37 @@ TEST_F(HeapSnapshotRuntimeTest, FunctionLocationAndNameTest) {
 #endif
 }
 
+TEST_F(HeapSnapshotRuntimeTest, FunctionDisplayNameTest) {
+  JSONFactory::Allocator alloc;
+  JSONFactory jsonFactory{alloc};
+  hbc::CompileFlags flags;
+  // Make sure that debug info is emitted for this source file when it's
+  // compiled.
+  flags.debug = true;
+  CallResult<HermesValue> res = runtime->run(
+      R"(function foo() {}; foo.displayName = "bar"; foo;)",
+      "file:///fake.js",
+      flags);
+  ASSERT_FALSE(isException(res));
+  Handle<JSFunction> func = runtime->makeHandle(vmcast<JSFunction>(*res));
+  const auto funcID = runtime->getHeap().getObjectID(func.get());
+
+  JSONObject *root = TAKE_SNAPSHOT(runtime->getHeap(), jsonFactory);
+  ASSERT_NE(root, nullptr);
+
+  const JSONArray &nodes = *llvm::cast<JSONArray>(root->at("nodes"));
+  const JSONArray &strings = *llvm::cast<JSONArray>(root->at("strings"));
+
+  auto node = FIND_NODE_FOR_ID(funcID, nodes, strings);
+  Node expected{HeapSnapshot::NodeType::Closure,
+                // Make sure the name that is reported is "bar", not "foo".
+                "bar",
+                funcID,
+                func->getAllocatedSize(),
+                11};
+  EXPECT_EQ(node, expected);
+}
+
 #ifdef HERMES_ENABLE_DEBUGGER
 
 static std::string functionInfoToString(
@@ -788,7 +820,7 @@ struct ChromeStackTreeNode {
           llvm::cast<JSONNumber>(traceNodes[i + 1])->getValue();
       auto children = llvm::cast<JSONArray>(traceNodes[i + 4]);
       auto treeNode =
-          std::make_unique<ChromeStackTreeNode>(parent, functionInfoIndex);
+          hermes::make_unique<ChromeStackTreeNode>(parent, functionInfoIndex);
       idNodeMap.emplace(id, treeNode.get());
       treeNode->children_ = parse(*children, treeNode.get(), idNodeMap);
       res.emplace_back(std::move(treeNode));
@@ -875,8 +907,8 @@ baz();
       R"#(
 global(1) @ test.js(4):2:1
 global(2) @ test.js(4):11:4
-baz(3) @ test.js(4):9:19
-foo(4) @ test.js(4):3:20)#");
+baz(7) @ test.js(4):9:19
+foo(8) @ test.js(4):3:20)#");
 
   auto barAllocNode = FIND_NODE_FOR_ID(barObjID, nodes, strings);
   auto barStackTreeNode = idNodeMap.find(barAllocNode.traceNodeID);
@@ -888,8 +920,8 @@ foo(4) @ test.js(4):3:20)#");
       R"#(
 global(1) @ test.js(4):2:1
 global(2) @ test.js(4):11:4
-foo(1) @ test.js(4):2:1
-baz(5) @ test.js(4):9:31)#");
+baz(3) @ test.js(4):9:31
+bar(4) @ test.js(4):6:20)#");
 }
 #endif // HERMES_ENABLE_DEBUGGER
 

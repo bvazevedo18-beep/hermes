@@ -10,10 +10,6 @@
  * and scoped locally.
  */
 
-body > div {
-  overflow: hidden;
-}
-
 .headerContainer {
   display: flex;
   flex-wrap: wrap;
@@ -94,6 +90,10 @@ html[data-theme='dark'] .helperButton {
   display: flex;
   flex-direction: row;
   flex-wrap: wrap;
+}
+
+.fixed {
+  position: fixed;
 }
 
 .spinner {

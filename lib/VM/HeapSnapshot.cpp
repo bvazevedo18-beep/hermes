@@ -8,6 +8,7 @@
 #include "hermes/VM/HeapSnapshot.h"
 
 #include "hermes/Support/Conversions.h"
+#include "hermes/Support/JSONEmitter.h"
 #include "hermes/Support/OSCompat.h"
 #include "hermes/Support/UTF8.h"
 #include "hermes/VM/StackTracesTree.h"
@@ -329,7 +330,7 @@ size_t HeapSnapshot::countFunctionTraceInfos() {
       count++;
       sourceLocSet.insert(curNode->sourceLoc);
     }
-    for (auto child : *curNode) {
+    for (auto child : curNode->getChildren()) {
       nodeStack.push_back(child);
     }
   }
@@ -385,7 +386,7 @@ void HeapSnapshot::emitAllocationTraceInfo() {
     json_.emitValue(curNode->sourceLoc.scriptName); // "script_id"
     json_.emitValue(curNode->sourceLoc.lineNo); // "line"
     json_.emitValue(curNode->sourceLoc.columnNo); // "column"
-    for (auto child : *curNode) {
+    for (auto child : curNode->getChildren()) {
       nodeStack.push(child);
     }
   }
@@ -393,7 +394,7 @@ void HeapSnapshot::emitAllocationTraceInfo() {
 
   beginSection(Section::TraceTree);
   // Start from the nodes below the sentinel node as this is always invalid
-  for (auto child : *stackTracesTree_->getRootNode()) {
+  for (auto child : stackTracesTree_->getRootNode()->getChildren()) {
     nodeStack.push(child);
   }
   while (!nodeStack.empty()) {
@@ -413,7 +414,7 @@ void HeapSnapshot::emitAllocationTraceInfo() {
     json_.emitValue(traceNodeStats_[curNode->id].size); // "size"
     json_.openArray();
     nodeStack.push(nullptr);
-    for (auto child : *curNode) {
+    for (auto child : curNode->getChildren()) {
       nodeStack.push(child);
     }
   }

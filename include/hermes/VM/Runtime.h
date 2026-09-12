@@ -12,7 +12,6 @@
 #include "hermes/Public/RuntimeConfig.h"
 #include "hermes/Support/Compiler.h"
 #include "hermes/Support/ErrorHandling.h"
-#include "hermes/Support/JSONEmitter.h"
 #include "hermes/VM/AllocResult.h"
 #include "hermes/VM/BasicBlockExecutionInfo.h"
 #include "hermes/VM/CallResult.h"
@@ -27,7 +26,6 @@
 #include "hermes/VM/InternalProperty.h"
 #include "hermes/VM/InterpreterState.h"
 #include "hermes/VM/JIT/JIT.h"
-#include "hermes/VM/MockedEnvironment.h"
 #include "hermes/VM/PointerBase.h"
 #include "hermes/VM/Predefined.h"
 #include "hermes/VM/Profiler.h"
@@ -58,6 +56,8 @@
 
 namespace hermes {
 // Forward declaration.
+class JSONEmitter;
+
 namespace inst {
 struct Inst;
 }
@@ -83,6 +83,7 @@ class ScopedNativeDepthTracker;
 class ScopedNativeCallFrame;
 class SamplingProfiler;
 class CodeCoverageProfiler;
+struct MockedEnvironment;
 
 #ifdef HERMESVM_PROFILER_BB
 class JSArray;
@@ -483,6 +484,10 @@ class Runtime : public HandleRootOwner,
   /// Returns the common storage object.
   RuntimeCommonStorage *getCommonStorage() {
     return commonStorage_.get();
+  }
+
+  const GCExecTrace &getGCExecTrace() {
+    return getHeap().getGCExecTrace();
   }
 
 #if defined(HERMES_ENABLE_DEBUGGER)
@@ -1064,11 +1069,13 @@ class Runtime : public HandleRootOwner,
       // UBSAN builds will hit a native stack overflow much earlier, so make
       // this limit dramatically lower.
       30
-#elif defined(_WINDOWS) && defined(HERMES_SLOW_DEBUG)
+#elif defined(_MSC_VER) && defined(__clang__) && defined(HERMES_SLOW_DEBUG)
+      30
+#elif defined(_MSC_VER) && defined(HERMES_SLOW_DEBUG)
       // On windows in dbg mode builds, stack frames are bigger, and a depth
       // limit of 384 results in a C++ stack overflow in testing.
       128
-#elif defined(_WINDOWS) && !NDEBUG
+#elif defined(_MSC_VER) && !NDEBUG
       192
 #else
       /// This depth limit was originally 256, and we
@@ -1532,10 +1539,11 @@ class NoAllocScope {
  public:
 #ifdef NDEBUG
   explicit NoAllocScope(Runtime *runtime) {}
+  explicit NoAllocScope(GC *gc) {}
   void release() {}
 #else
-  explicit NoAllocScope(Runtime *runtime)
-      : noAllocLevel_(&runtime->getHeap().noAllocLevel_) {
+  explicit NoAllocScope(Runtime *runtime) : NoAllocScope(&runtime->getHeap()) {}
+  explicit NoAllocScope(GC *gc) : noAllocLevel_(&gc->noAllocLevel_) {
     ++*noAllocLevel_;
   }
 

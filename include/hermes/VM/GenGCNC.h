@@ -23,7 +23,6 @@
 #include "hermes/VM/GCPointer.h"
 #include "hermes/VM/GCSegmentAddressIndex.h"
 #include "hermes/VM/HermesValue.h"
-#include "hermes/VM/LogFailStorageProvider.h"
 #include "hermes/VM/OldGenNC.h"
 #include "hermes/VM/SweepResultNC.h"
 #include "hermes/VM/YoungGenNC.h"
@@ -251,6 +250,11 @@ class GenGC final : public GCBase {
   /// \p canEffectiveOOM Indicates whether the GC can declare effective OOM as a
   ///     result of this collection.
   void collect(bool canEffectiveOOM = false);
+
+  static constexpr uint32_t minAllocationSize() {
+    // NCGen doesn't enforce a minimum allocation requirement.
+    return 0;
+  }
 
   static constexpr uint32_t maxAllocationSize() {
     // The largest allocation allowable in NCGen is the max size a single
@@ -791,7 +795,7 @@ class GenGC final : public GCBase {
   friend class WeakRef;
 
   /// The storage provider is a way to access storage for new segments.
-  LogFailStorageProvider storageProvider_;
+  std::shared_ptr<StorageProvider> storageProvider_;
 
   /// A mapping from the lowest address in a segment's memory region, to a
   /// pointer to the segment itself.
@@ -1080,7 +1084,7 @@ inline size_t GenGC::numFullGCs() const {
 }
 
 inline size_t GenGC::numFailedSegmentMaterializations() const {
-  return storageProvider_.numFailedAllocs();
+  return storageProvider_->numFailedAllocs();
 }
 
 #ifndef NDEBUG

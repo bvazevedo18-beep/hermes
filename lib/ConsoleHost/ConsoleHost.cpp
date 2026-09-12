@@ -13,6 +13,7 @@
 #include "hermes/VM/Callable.h"
 #include "hermes/VM/Domain.h"
 #include "hermes/VM/JSObject.h"
+#include "hermes/VM/MockedEnvironment.h"
 #include "hermes/VM/NativeArgs.h"
 #include "hermes/VM/Profiler/SamplingProfiler.h"
 #include "hermes/VM/Runtime.h"
@@ -198,7 +199,8 @@ void installConsoleBindings(
   auto defineGlobalFunc = [&](vm::SymbolID name,
                               vm::NativeFunctionPtr functionPtr,
                               void *context,
-                              unsigned paramCount) {
+                              unsigned paramCount) -> void {
+    vm::GCScopeMarkerRAII marker{runtime};
 #ifdef HERMESVM_SERIALIZE
     assert(
         (std::find(pointers.begin(), pointers.end(), (void *)functionPtr) !=

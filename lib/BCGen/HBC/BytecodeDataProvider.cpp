@@ -31,7 +31,10 @@ static bool sanityCheck(
     std::string *errorMessage) {
   if (aref.size() < sizeof(hbc::BytecodeFileHeader)) {
     if (errorMessage) {
-      *errorMessage = "Buffer too small";
+      llvm::raw_string_ostream errs(*errorMessage);
+      errs << "Buffer smaller than a bytecode file header. Expected at least "
+           << sizeof(hbc::BytecodeFileHeader) << " bytes but got "
+           << aref.size() << " bytes";
     }
     return false;
   }
@@ -71,7 +74,10 @@ static bool sanityCheck(
   }
   if (aref.size() < header->fileLength) {
     if (errorMessage) {
-      *errorMessage = "Buffer too small";
+      llvm::raw_string_ostream errs(*errorMessage);
+      errs
+          << "Buffer is smaller than the size stated in the file header. Expected at least "
+          << header->fileLength << " bytes but got " << aref.size() << " bytes";
     }
     return false;
   }
@@ -203,10 +209,9 @@ bool BytecodeFileFields<Mutable>::populateFromBuffer(
           castArrayRef<StringKind::Entry>(buf, h->stringKindCount, end);
     }
 
-    void visitIdentifierTranslations() {
+    void visitIdentifierHashes() {
       align(buf);
-      f.identifierTranslations =
-          castArrayRef<uint32_t>(buf, h->identifierCount, end);
+      f.identifierHashes = castArrayRef<uint32_t>(buf, h->identifierCount, end);
     }
 
     void visitSmallStringTable() {
@@ -223,7 +228,8 @@ bool BytecodeFileFields<Mutable>::populateFromBuffer(
 
     void visitStringStorage() {
       align(buf);
-      f.stringStorage = castArrayRef<char>(buf, h->stringStorageSize, end);
+      f.stringStorage =
+          castArrayRef<unsigned char>(buf, h->stringStorageSize, end);
     }
     void visitArrayBuffer() {
       align(buf);
@@ -417,14 +423,14 @@ void BCProviderFromBuffer::adviseStringTableSequential() {
   size_t adviceLength = end - start;
 
   ASSERT_BOUNDED(start, stringKinds_, end);
-  ASSERT_BOUNDED(start, identifierTranslations_, end);
+  ASSERT_BOUNDED(start, identifierHashes_, end);
   ASSERT_BOUNDED(start, smallStringTableEntries, end);
   ASSERT_BOUNDED(start, overflowStringTableEntries_, end);
 
   ASSERT_TOTAL_ARRAY_LEN(
       adviceLength,
       stringKinds_,
-      identifierTranslations_,
+      identifierHashes_,
       smallStringTableEntries,
       overflowStringTableEntries_);
 
@@ -438,7 +444,7 @@ void BCProviderFromBuffer::adviseStringTableRandom() {
 
   // We only advise the small string table entries, overflow string table
   // entries and storage.  We do not give advice about the identifier
-  // translations or string kinds because they are not referred to after
+  // hashes or string kinds because they are not referred to after
   // initialisation.
 
   auto *tableStart = rawptr_cast(stringTableEntries_);
@@ -469,14 +475,14 @@ void BCProviderFromBuffer::willNeedStringTable() {
   size_t prefetchLength = end - start;
 
   ASSERT_BOUNDED(start, stringKinds_, end);
-  ASSERT_BOUNDED(start, identifierTranslations_, end);
+  ASSERT_BOUNDED(start, identifierHashes_, end);
   ASSERT_BOUNDED(start, smallStringTableEntries, end);
   ASSERT_BOUNDED(start, overflowStringTableEntries_, end);
 
   ASSERT_TOTAL_ARRAY_LEN(
       prefetchLength,
       stringKinds_,
-      identifierTranslations_,
+      identifierHashes_,
       smallStringTableEntries,
       overflowStringTableEntries_);
 
@@ -484,9 +490,9 @@ void BCProviderFromBuffer::willNeedStringTable() {
   oscompat::vm_prefetch(start, prefetchLength);
 }
 
-void BCProviderFromBuffer::dontNeedIdentifierTranslations() {
-  auto start = reinterpret_cast<uintptr_t>(identifierTranslations_.begin());
-  auto end = reinterpret_cast<uintptr_t>(identifierTranslations_.end());
+void BCProviderFromBuffer::dontNeedIdentifierHashes() {
+  auto start = reinterpret_cast<uintptr_t>(identifierHashes_.begin());
+  auto end = reinterpret_cast<uintptr_t>(identifierHashes_.end());
   const size_t PS = oscompat::page_size();
   start = llvm::alignTo(start, PS);
   end = llvm::alignDown(end, PS);
@@ -524,7 +530,7 @@ BCProviderFromBuffer::BCProviderFromBuffer(
   debugInfoOffset_ = fileHeader->debugInfoOffset;
   functionHeaders_ = fields.functionHeaders.data();
   stringKinds_ = fields.stringKinds;
-  identifierTranslations_ = fields.identifierTranslations;
+  identifierHashes_ = fields.identifierHashes;
   stringCount_ = fileHeader->stringCount;
   stringTableEntries_ = fields.stringTableEntries.data();
   overflowStringTableEntries_ = fields.stringTableOverflowEntries;
@@ -577,7 +583,7 @@ void BCProviderFromBuffer::createDebugInfo() {
   auto filenameTable =
       castArrayRef<StringTableEntry>(buf, header->filenameCount, end_);
   auto filenameStorage =
-      castArrayRef<char>(buf, header->filenameStorageSize, end_);
+      castArrayRef<unsigned char>(buf, header->filenameStorageSize, end_);
 
   hbc::DebugInfo::DebugFileRegionList files;
   for (unsigned i = 0; i < header->fileRegionCount; i++) {

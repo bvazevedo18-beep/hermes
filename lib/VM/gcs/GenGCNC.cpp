@@ -322,6 +322,8 @@ void GenGC::collect(bool canEffectiveOOM) {
   const size_t usedBefore = used();
   const size_t sizeBefore = size();
   cumPreBytes_ += used();
+  const size_t ygUsedBefore = youngGen_.used();
+  const size_t ogUsedBefore = oldGen_.used();
 
   // To be filled in after collection has happened.
   size_t usedAfter;
@@ -372,6 +374,9 @@ void GenGC::collect(bool canEffectiveOOM) {
         /* youngGenIsEmpty */ youngGen_.usedDirect() == 0);
 
     gcCallbacks_->freeSymbols(markedSymbols_);
+    if (idTracker_.isTrackingIDs()) {
+      idTracker_.untrackUnmarkedSymbols(markedSymbols_);
+    }
 
     // Update the exponential weighted average of live size, which we'll
     // consult if we need to shrink the heap.
@@ -409,6 +414,9 @@ void GenGC::collect(bool canEffectiveOOM) {
     fullCollection.addArg("fullGCNum", fullCollectionCumStats_.numCollections);
 
     checkInvariants(numAllocatedObjectsBefore, usedBefore);
+
+    execTrace_.addFullGC(
+        ygUsedBefore, youngGen_.used(), ogUsedBefore, oldGen_.used());
   }
 
   /// Update the heap's segments extents in the crash manager data.
@@ -1574,6 +1582,9 @@ void GenGC::createSnapshot(llvm::raw_ostream &os) {
   // We'll say we're in GC even though we're not, to avoid assertion failures.
   GCCycle cycle{this};
 
+  // No allocations are allowed throughout the entire heap snapshot process.
+  NoAllocScope scope{this};
+
 #ifdef HERMES_SLOW_DEBUG
   checkWellFormedHeap();
 #endif
@@ -2053,51 +2064,51 @@ void GenGC::printCensusByKindStatsWork(
 void GenGC::sizeDiagnosticCensus() {
   struct HeapSizeDiagnostic {
     struct HermesValueDiagnostic {
-      size_t count = 0;
-      size_t numBool = 0;
-      size_t numNumber = 0;
-      size_t numInt8 = 0;
-      size_t numInt16 = 0;
-      size_t numInt24 = 0;
-      size_t numInt32 = 0;
-      size_t numSymbol = 0;
-      size_t numNull = 0;
-      size_t numUndefined = 0;
-      size_t numEmpty = 0;
-      size_t numNativeValue = 0;
-      size_t numString = 0;
-      size_t numObject = 0;
+      uint64_t count = 0;
+      uint64_t numBool = 0;
+      uint64_t numNumber = 0;
+      uint64_t numInt8 = 0;
+      uint64_t numInt16 = 0;
+      uint64_t numInt24 = 0;
+      uint64_t numInt32 = 0;
+      uint64_t numSymbol = 0;
+      uint64_t numNull = 0;
+      uint64_t numUndefined = 0;
+      uint64_t numEmpty = 0;
+      uint64_t numNativeValue = 0;
+      uint64_t numString = 0;
+      uint64_t numObject = 0;
     };
 
     struct StringDiagnostic {
-      size_t count = 0;
+      uint64_t count = 0;
       // Count of strings of a given size. Initialize to all zeros.
       // The zeroth index is unused, but left as zero.
-      std::array<size_t, 8> countPerSize{};
-      size_t totalChars = 0;
+      std::array<uint64_t, 8> countPerSize{};
+      uint64_t totalChars = 0;
     };
 
-    size_t numCell = 0;
-    size_t numVariableSizedObject = 0;
-    size_t numPointer = 0;
-    size_t numSymbol = 0;
+    uint64_t numCell = 0;
+    uint64_t numVariableSizedObject = 0;
+    uint64_t numPointer = 0;
+    uint64_t numSymbol = 0;
     HermesValueDiagnostic hv;
     StringDiagnostic asciiStr;
     StringDiagnostic utf16Str;
 
     const char *fmts[3] = {
-        "\t%-25s : %'10" PRIdPTR " [%'10" PRIdPTR " B | %4.1f%%]",
-        "\t\t%-25s : %'10" PRIdPTR " [%'10" PRIdPTR " B | %4.1f%%]",
-        "\t\t\t%-25s : %'10" PRIdPTR " [%'10" PRIdPTR " B | %4.1f%%]"};
+        "\t%-25s : %'10" PRIu64 " [%'10" PRIu64 " B | %4.1f%%]",
+        "\t\t%-25s : %'10" PRIu64 " [%'10" PRIu64 " B | %4.1f%%]",
+        "\t\t\t%-25s : %'10" PRIu64 " [%'10" PRIu64 " B | %4.1f%%]"};
 
     void rootsDiagnosticFrame() const {
       // Use this to print commas on large numbers
       char *currentLocale = std::setlocale(LC_NUMERIC, nullptr);
       std::setlocale(LC_NUMERIC, "");
 
-      size_t rootSize = hv.count * sizeof(HermesValue) +
+      uint64_t rootSize = hv.count * sizeof(HermesValue) +
           numPointer * sizeof(GCPointerBase) + numSymbol * sizeof(SymbolID);
-      hermesLog("HermesGC", "Root size: %'7" PRIdPTR " B", rootSize);
+      hermesLog("HermesGC", "Root size: %'7" PRIu64 " B", rootSize);
 
       hermesValueDiagnostic(rootSize);
       gcPointerDiagnostic(rootSize);
@@ -2106,22 +2117,22 @@ void GenGC::sizeDiagnosticCensus() {
       std::setlocale(LC_NUMERIC, currentLocale);
     }
 
-    void sizeDiagnosticFrame(size_t heapSize) const {
+    void sizeDiagnosticFrame(uint64_t heapSize) const {
       // Use this to print commas on large numbers
       char *currentLocale = std::setlocale(LC_NUMERIC, nullptr);
       std::setlocale(LC_NUMERIC, "");
 
-      hermesLog("HermesGC", "Heap size: %'7" PRIdPTR " B", heapSize);
-      hermesLog("HermesGC", "\tTotal cells: %'7" PRIdPTR, numCell);
+      hermesLog("HermesGC", "Heap size: %'7" PRIu64 " B", heapSize);
+      hermesLog("HermesGC", "\tTotal cells: %'7" PRIu64, numCell);
       hermesLog(
           "HermesGC",
-          "\tNum variable size cells: %'7" PRIdPTR,
+          "\tNum variable size cells: %'7" PRIu64,
           numVariableSizedObject);
 
       // In theory should use sizeof(VariableSizeRuntimeCell), but that includes
       // padding sometimes. To be conservative, use the field it contains
       // directly instead.
-      size_t headerSize =
+      uint64_t headerSize =
           numVariableSizedObject * (sizeof(GCCell) + sizeof(uint32_t)) +
           (numCell - numVariableSizedObject) * sizeof(GCCell);
       hermesLog(
@@ -2184,7 +2195,7 @@ void GenGC::sizeDiagnosticCensus() {
         }
       }
 
-      size_t leftover = heapSize - (hv.count * sizeof(HermesValue)) -
+      uint64_t leftover = heapSize - (hv.count * sizeof(HermesValue)) -
           (numPointer * sizeof(GCPointerBase)) - (asciiStr.totalChars * 2) -
           utf16Str.totalChars - headerSize;
       hermesLog(
@@ -2199,8 +2210,8 @@ void GenGC::sizeDiagnosticCensus() {
     }
 
    private:
-    void hermesValueDiagnostic(size_t heapSize) const {
-      constexpr size_t bytesHV = sizeof(HermesValue);
+    void hermesValueDiagnostic(uint64_t heapSize) const {
+      constexpr uint64_t bytesHV = sizeof(HermesValue);
       hermesLog(
           "HermesGC",
           fmts[0],
@@ -2254,7 +2265,7 @@ void GenGC::sizeDiagnosticCensus() {
             hv.numInt32 * bytesHV,
             getPercent(hv.numInt32, hv.numNumber));
 
-        size_t numDoubles =
+        uint64_t numDoubles =
             hv.numNumber - hv.numInt32 - hv.numInt24 - hv.numInt16 - hv.numInt8;
         hermesLog(
             "HermesGC",
@@ -2316,7 +2327,7 @@ void GenGC::sizeDiagnosticCensus() {
           getPercent(hv.numObject, hv.count));
     }
 
-    void gcPointerDiagnostic(size_t heapSize) const {
+    void gcPointerDiagnostic(uint64_t heapSize) const {
       hermesLog(
           "HermesGC",
           fmts[0],
@@ -2326,7 +2337,7 @@ void GenGC::sizeDiagnosticCensus() {
           getPercent(numPointer * sizeof(GCPointerBase), heapSize));
     }
 
-    void symbolDiagnostic(size_t heapSize) const {
+    void symbolDiagnostic(uint64_t heapSize) const {
       hermesLog(
           "HermesGC",
           fmts[0],

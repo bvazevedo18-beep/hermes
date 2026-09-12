@@ -26,15 +26,6 @@ const char *g_tokenStr[] = {
 
 const int UTF8_LINE_TERMINATOR_CHAR0 = 0xe2;
 
-inline bool matchUnicodeLineTerminator(const char *curCharPtr_) {
-  // Line separator \u2028 UTF8 encoded is      : e2 80 a8
-  // Paragraph separator \u2029 UTF8 encoded is: e2 80 a9
-  return (unsigned char)curCharPtr_[0] == UTF8_LINE_TERMINATOR_CHAR0 &&
-      (unsigned char)curCharPtr_[1] == 0x80 &&
-      ((unsigned char)curCharPtr_[2] == 0xa8 ||
-       (unsigned char)curCharPtr_[2] == 0xa9);
-}
-
 inline bool matchUnicodeLineTerminatorOffset1(const char *curCharPtr_) {
   // Line separator \u2028 UTF8 encoded is      : e2 80 a8
   // Paragraph separator \u2029 UTF8 encoded is: e2 80 a9
@@ -418,7 +409,7 @@ const Token *JSLexer::advance(GrammarContext grammarContext) {
       case 'V': case 'W': case 'X': case 'Y': case 'Z':
         // clang-format on
         token_.setStart(curCharPtr_);
-        scanIdentifierFastPath(curCharPtr_);
+        scanIdentifierFastPathInContext(curCharPtr_, grammarContext);
         break;
 
       case '\\': {
@@ -434,14 +425,14 @@ const Token *JSLexer::advance(GrammarContext grammarContext) {
         } else {
           appendUnicodeToStorage(cp);
         }
-        scanIdentifierParts();
+        scanIdentifierPartsInContext(grammarContext);
         break;
       }
 
       case '\'':
       case '"':
         token_.setStart(curCharPtr_);
-        scanString();
+        scanStringInContext(grammarContext);
         break;
 
       case '`':
@@ -457,7 +448,7 @@ const Token *JSLexer::advance(GrammarContext grammarContext) {
         if (isUnicodeOnlyLetter(ch)) {
           tmpStorage_.clear();
           appendUnicodeToStorage(ch);
-          scanIdentifierParts();
+          scanIdentifierPartsInContext(grammarContext);
         } else if (isUnicodeOnlySpace(ch)) {
           continue;
         } else {
@@ -482,6 +473,47 @@ const Token *JSLexer::advance(GrammarContext grammarContext) {
 
   token_.setEnd(curCharPtr_);
 
+  return &token_;
+}
+
+const Token *JSLexer::advanceInJSXChild() {
+  token_.setStart(curCharPtr_);
+  for (;;) {
+    assert(curCharPtr_ <= bufferEnd_ && "lexing past end of input");
+    switch (*curCharPtr_) {
+      PUNC_L1_1('{', TokenKind::l_brace);
+      PUNC_L1_1('<', TokenKind::less);
+
+      case 0:
+        if (curCharPtr_ == bufferEnd_) {
+          token_.setEof();
+          break;
+        }
+        // Fall-through to start scanning text.
+
+      default: {
+        token_.setStart(curCharPtr_);
+        // FIXME: Cook rawStorage_ into a value using XHTML entities.
+        rawStorage_.clear();
+        for (;;) {
+          char c = *curCharPtr_;
+          if ((c == 0 && curCharPtr_ == bufferEnd_) || c == '{' || c == '<') {
+            token_.setJSXText(
+                getStringLiteral(rawStorage_.str()),
+                getStringLiteral(rawStorage_.str()));
+            break;
+          }
+          rawStorage_.push_back(c);
+          ++curCharPtr_;
+        }
+        break;
+      }
+    }
+
+    // Always terminate the loop unless "continue" was used.
+    break;
+  }
+  token_.setEnd(curCharPtr_);
   return &token_;
 }
 
@@ -607,13 +639,12 @@ const Token *JSLexer::rescanRBraceInTemplateLiteral() {
   return &token_;
 }
 
-OptValue<TokenKind> JSLexer::lookaheadAfterAsync(
-    OptValue<TokenKind> expectedToken) {
+OptValue<TokenKind> JSLexer::lookahead1(OptValue<TokenKind> expectedToken) {
   assert(
-      token_.getKind() == TokenKind::identifier &&
-      token_.getIdentifier()->str() == "async" &&
-      "current token must be 'async'");
-  UniqueString *savedIdent = token_.getIdentifier();
+      token_.getKind() == TokenKind::identifier ||
+      token_.isResWord() && "unsupported current token");
+  UniqueString *savedIdent = token_.getResWordOrIdentifier();
+  TokenKind savedKind = token_.getKind();
   SMLoc start = token_.getStartLoc();
   SMLoc end = token_.getEndLoc();
   const char *cur = curCharPtr_;
@@ -633,7 +664,11 @@ OptValue<TokenKind> JSLexer::lookaheadAfterAsync(
 
   token_.setStart(start.getPointer());
   token_.setEnd(end.getPointer());
-  token_.setIdentifier(savedIdent);
+  if (savedKind == TokenKind::identifier) {
+    token_.setIdentifier(savedIdent);
+  } else {
+    token_.setResWord(savedKind, savedIdent);
+  }
   seek(SMLoc::getFromPointer(cur));
 
   return kind;
@@ -745,10 +780,11 @@ bool JSLexer::consumeIdentifierStart() {
   return false;
 }
 
+template <bool JSX>
 bool JSLexer::consumeOneIdentifierPartNoEscape() {
   char ch = *curCharPtr_;
   if (ch == '_' || ch == '$' || ((ch | 32) >= 'a' && (ch | 32) <= 'z') ||
-      (ch >= '0' && ch <= '9')) {
+      (ch >= '0' && ch <= '9') || (JSX && ch == '-')) {
     tmpStorage_.push_back(*curCharPtr_++);
     return true;
   } else if (LLVM_UNLIKELY(isUTF8Start(ch))) {
@@ -765,11 +801,12 @@ bool JSLexer::consumeOneIdentifierPartNoEscape() {
   return false;
 }
 
+template <bool JSX>
 void JSLexer::consumeIdentifierParts() {
   for (;;) {
     // Try consuming an non-escaped identifier part. Failing that, check for an
     // escape.
-    if (consumeOneIdentifierPartNoEscape())
+    if (consumeOneIdentifierPartNoEscape<JSX>())
       continue;
     else if (*curCharPtr_ == '\\') {
       // Decode the escape.
@@ -1112,7 +1149,7 @@ end:
   //
   if (consumeIdentifierStart()) {
     ok = false;
-    consumeIdentifierParts();
+    consumeIdentifierParts<false>();
   }
 
   token_.setEnd(curCharPtr_);
@@ -1220,6 +1257,7 @@ TokenKind JSLexer::scanReservedWord(const char *start, unsigned length) {
   return rw;
 }
 
+template <bool JSX>
 void JSLexer::scanIdentifierFastPath(const char *start) {
   const char *end = start;
 
@@ -1228,14 +1266,14 @@ void JSLexer::scanIdentifierFastPath(const char *start) {
   do
     ch = (unsigned char)*++end;
   while (ch == '_' || ch == '$' || ((ch | 32) >= 'a' && (ch | 32) <= 'z') ||
-         (ch >= '0' && ch <= '9'));
+         (ch >= '0' && ch <= '9') || (JSX && ch == '-'));
 
   // Check whether a slow part of the identifier follows.
   if (LLVM_UNLIKELY(ch == '\\')) {
     // An escape. Pass the baton to the slow path.
     initStorageWith(start, end);
     curCharPtr_ = end;
-    scanIdentifierParts();
+    scanIdentifierParts<JSX>();
     return;
   } else if (LLVM_UNLIKELY(isUTF8Start(ch))) {
     // If we have encountered a Unicode character, we try to decode it. If it
@@ -1246,7 +1284,7 @@ void JSLexer::scanIdentifierFastPath(const char *start) {
       initStorageWith(start, end);
       appendUnicodeToStorage(decoded.first);
       curCharPtr_ = decoded.second;
-      scanIdentifierParts();
+      scanIdentifierParts<JSX>();
       return;
     }
   }
@@ -1264,12 +1302,14 @@ void JSLexer::scanIdentifierFastPath(const char *start) {
   }
 }
 
+template <bool JSX>
 void JSLexer::scanIdentifierParts() {
-  consumeIdentifierParts();
+  consumeIdentifierParts<JSX>();
   token_.setEnd(curCharPtr_);
   token_.setIdentifier(getIdentifier(tmpStorage_.str()));
 }
 
+template <bool JSX>
 void JSLexer::scanString() {
   assert(*curCharPtr_ == '\'' || *curCharPtr_ == '"');
   char quoteCh = *curCharPtr_++;
@@ -1385,12 +1425,14 @@ void JSLexer::scanString() {
             tmpStorage_.push_back((unsigned char)*curCharPtr_++);
           break;
       }
-    } else if (LLVM_UNLIKELY(
-                   *curCharPtr_ == '\n' || *curCharPtr_ == '\r' ||
-                   matchUnicodeLineTerminator(curCharPtr_))) {
-      error(SMLoc::getFromPointer(curCharPtr_), "non-terminated string");
-      sm_.note(token_.getStartLoc(), "string started here");
-      break;
+    } else if (LLVM_UNLIKELY(*curCharPtr_ == '\n' || *curCharPtr_ == '\r')) {
+      if (JSX) {
+        tmpStorage_.push_back(*curCharPtr_++);
+      } else {
+        error(SMLoc::getFromPointer(curCharPtr_), "non-terminated string");
+        sm_.note(token_.getStartLoc(), "string started here");
+        break;
+      }
     } else if (LLVM_UNLIKELY(*curCharPtr_ == 0 && curCharPtr_ == bufferEnd_)) {
       error(SMLoc::getFromPointer(curCharPtr_), "non-terminated string");
       sm_.note(token_.getStartLoc(), "string started here");
@@ -1742,7 +1784,7 @@ exitLoop:
   tmpStorage_.clear();
   bool escapingBackslash = false;
   for (;;) {
-    if (consumeOneIdentifierPartNoEscape()) {
+    if (consumeOneIdentifierPartNoEscape<false>()) {
       escapingBackslash = false;
       continue;
     } else if (*curCharPtr_ == '\\') {

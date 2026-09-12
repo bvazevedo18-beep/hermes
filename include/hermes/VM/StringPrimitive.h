@@ -287,8 +287,8 @@ class StringPrimitive : public VariableSizeRuntimeCell {
   /// Get a StringRef of T. T must be char or char16_t corresponding to whether
   /// this string is ASCII or UTF-16.
   template <typename T>
-  ArrayRef<T> getStringRef() const {
-    return ArrayRef<T>{castToPointer<T>(), getStringLength()};
+  llvm::ArrayRef<T> getStringRef() const {
+    return llvm::ArrayRef<T>{castToPointer<T>(), getStringLength()};
   }
 
  private:
@@ -484,7 +484,11 @@ class DynamicStringPrimitive final
   /// Calculate the allocation size of a StringPrimitive given character
   /// length.
   static uint32_t allocationSize(uint32_t length) {
-    return DynamicStringPrimitive::template totalSizeToAlloc<T>(length);
+    // In the future it would be better to have the GC return a new size
+    // instead of having the caller decide.
+    return std::max(
+        DynamicStringPrimitive::template totalSizeToAlloc<T>(length),
+        static_cast<size_t>(GC::minAllocationSize()));
   }
 
   const T *getRawPointer() const {
@@ -961,7 +965,7 @@ inline CallResult<HermesValue> StringPrimitive::createLongLived(
 }
 
 inline bool StringPrimitive::canBeUniqued() const {
-  return isa<SymbolStringPrimitive>(this);
+  return vmisa<SymbolStringPrimitive>(this);
 }
 
 inline void StringPrimitive::convertToUniqued(hermes::vm::SymbolID uniqueID) {
@@ -986,9 +990,9 @@ inline const char16_t *StringPrimitive::castToPointer<char16_t>() const {
 inline const char *StringPrimitive::castToASCIIPointer() const {
   if (LLVM_UNLIKELY(isExternal())) {
     return vmcast<ExternalASCIIStringPrimitive>(this)->getRawPointer();
-  } else if (isa<DynamicUniquedASCIIStringPrimitive>(this)) {
+  } else if (vmisa<DynamicUniquedASCIIStringPrimitive>(this)) {
     return vmcast<DynamicUniquedASCIIStringPrimitive>(this)->getRawPointer();
-  } else if (isa<DynamicASCIIStringPrimitive>(this)) {
+  } else if (vmisa<DynamicASCIIStringPrimitive>(this)) {
     return vmcast<DynamicASCIIStringPrimitive>(this)->getRawPointer();
   } else {
     return vmcast<BufferedASCIIStringPrimitive>(this)->getRawPointer();
@@ -998,9 +1002,9 @@ inline const char *StringPrimitive::castToASCIIPointer() const {
 inline const char16_t *StringPrimitive::castToUTF16Pointer() const {
   if (LLVM_UNLIKELY(isExternal())) {
     return vmcast<ExternalUTF16StringPrimitive>(this)->getRawPointer();
-  } else if (isa<DynamicUniquedUTF16StringPrimitive>(this)) {
+  } else if (vmisa<DynamicUniquedUTF16StringPrimitive>(this)) {
     return vmcast<DynamicUniquedUTF16StringPrimitive>(this)->getRawPointer();
-  } else if (isa<DynamicUTF16StringPrimitive>(this)) {
+  } else if (vmisa<DynamicUTF16StringPrimitive>(this)) {
     return vmcast<DynamicUTF16StringPrimitive>(this)->getRawPointer();
   } else {
     return vmcast<BufferedUTF16StringPrimitive>(this)->getRawPointer();
@@ -1010,7 +1014,7 @@ inline const char16_t *StringPrimitive::castToUTF16Pointer() const {
 inline char *StringPrimitive::castToASCIIPointerForWrite() {
   if (LLVM_UNLIKELY(isExternal())) {
     return vmcast<ExternalASCIIStringPrimitive>(this)->getRawPointerForWrite();
-  } else if (isa<DynamicUniquedASCIIStringPrimitive>(this)) {
+  } else if (vmisa<DynamicUniquedASCIIStringPrimitive>(this)) {
     return vmcast<DynamicUniquedASCIIStringPrimitive>(this)
         ->getRawPointerForWrite();
   } else {
@@ -1021,7 +1025,7 @@ inline char *StringPrimitive::castToASCIIPointerForWrite() {
 inline char16_t *StringPrimitive::castToUTF16PointerForWrite() {
   if (LLVM_UNLIKELY(isExternal())) {
     return vmcast<ExternalUTF16StringPrimitive>(this)->getRawPointerForWrite();
-  } else if (isa<DynamicUniquedUTF16StringPrimitive>(this)) {
+  } else if (vmisa<DynamicUniquedUTF16StringPrimitive>(this)) {
     return vmcast<DynamicUniquedUTF16StringPrimitive>(this)
         ->getRawPointerForWrite();
   } else {
